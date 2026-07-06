@@ -1,0 +1,112 @@
+const form = document.querySelector("#convertForm");
+const fileInput = document.querySelector("#fileInput");
+const fileLabel = document.querySelector("#fileLabel");
+const statusBox = document.querySelector("#status");
+const preview = document.querySelector("#preview");
+const downloadLink = document.querySelector("#downloadLink");
+const pdfLink = document.querySelector("#pdfLink");
+const pdfPreview = document.querySelector("#pdfPreview");
+const pageBadge = document.querySelector("#pageBadge");
+const report = document.querySelector("#report");
+const analyzeBtn = document.querySelector("#analyzeBtn");
+const clearBtn = document.querySelector("#clearBtn");
+
+function setStatus(message, mode = "idle") {
+  statusBox.textContent = message;
+  statusBox.className = `status ${mode}`;
+}
+
+function currentFormData() {
+  const data = new FormData(form);
+  if (fileInput.files[0]) data.set("file", fileInput.files[0]);
+  return data;
+}
+
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files[0];
+  fileLabel.textContent = file ? file.name : "拖曳或選擇考卷 Word 檔";
+  resetResult();
+  setStatus(file ? "已選擇檔案，可以分析或直接轉換" : "尚未選擇檔案");
+});
+
+analyzeBtn.addEventListener("click", async () => {
+  if (!fileInput.files[0]) {
+    setStatus("請先選擇 Word 檔。", "error");
+    return;
+  }
+  setStatus("正在分析原始檔內容...", "busy");
+  preview.innerHTML = "";
+  const res = await fetch("/api/analyze", { method: "POST", body: currentFormData() });
+  const json = await res.json();
+  if (!res.ok) {
+    setStatus(json.error || "分析失敗。", "error");
+    return;
+  }
+  setStatus(`分析完成：共讀到 ${json.blocks} 個內容區塊`, "ok");
+  preview.innerHTML = json.preview.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
+});
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!fileInput.files[0]) {
+    setStatus("請先選擇 Word 檔。", "error");
+    return;
+  }
+  setStatus("正在套用固定格式並產生 Word...", "busy");
+  resetResult({ keepPreview: true });
+  const res = await fetch("/api/convert", { method: "POST", body: currentFormData() });
+  const json = await res.json();
+  if (!res.ok) {
+    setStatus(json.error || "轉換失敗。", "error");
+    return;
+  }
+  const pageText = json.pdf_pages ? `，PDF ${json.pdf_pages} 頁` : "";
+  const compactText = json.compact_level ? `，已套用第 ${json.compact_level} 級壓縮` : "";
+  setStatus(`轉換完成：段落 ${json.stats.paragraphs}、表格 ${json.stats.tables}${pageText}${compactText}`, "ok");
+  downloadLink.href = json.download;
+  downloadLink.hidden = false;
+  if (json.pdf) {
+    pdfLink.href = json.pdf;
+    pdfLink.hidden = false;
+  }
+  if (json.preview) {
+    pdfPreview.src = json.preview;
+    pdfPreview.hidden = false;
+  }
+  if (json.pdf_pages) {
+    pageBadge.textContent = `PDF 頁數：${json.pdf_pages}`;
+    pageBadge.className = json.pdf_pages > Number(form.target_pages.value || 0) ? "page-badge warn" : "page-badge ok";
+    pageBadge.hidden = false;
+  }
+  if (json.report?.length || json.warnings?.length) {
+    const items = [...(json.report || []), ...(json.warnings || []).map((item) => `提醒：${item}`)];
+    report.innerHTML = items.map((item) => `<p>${escapeHtml(item)}</p>`).join("");
+    report.hidden = false;
+  }
+});
+
+clearBtn.addEventListener("click", async () => {
+  await fetch("/api/clear", { method: "POST" });
+  resetResult();
+  setStatus("暫存檔已清除。", "ok");
+});
+
+function resetResult(options = {}) {
+  downloadLink.hidden = true;
+  pdfLink.hidden = true;
+  pdfPreview.hidden = true;
+  pageBadge.hidden = true;
+  report.hidden = true;
+  report.innerHTML = "";
+  if (!options.keepPreview) preview.innerHTML = "";
+}
+
+function escapeHtml(value) {
+  return value.replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  })[char]);
+}

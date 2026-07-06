@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-Hant" data-app-version="{{ app_version }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_title }}</title>
+  <meta name="description" content="{{ app_description }}">
+  <meta name="theme-color" content="#246b54">
+  <meta name="application-name" content="{{ app_title }}">
+  <meta name="apple-mobile-web-app-title" content="{{ app_title }}">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+
+  <link rel="canonical" href="{{ site_url }}">
+  <link rel="icon" href="static/assets/favicon.ico" sizes="any">
+  <link rel="icon" type="image/svg+xml" href="static/assets/favicon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="static/assets/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="static/assets/favicon-16.png">
+  <link rel="apple-touch-icon" href="static/assets/apple-touch-icon.png">
+  <link rel="manifest" href="static/manifest.webmanifest">
+
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="zh_TW">
+  <meta property="og:site_name" content="{{ school_name }}">
+  <meta property="og:url" content="{{ site_url }}">
+  <meta property="og:title" content="{{ app_title }}">
+  <meta property="og:description" content="{{ app_description }}">
+  <meta property="og:image" content="{{ site_url }}static/assets/og-exam-format.png?v={{ asset_version }}">
+  <meta property="og:image:secure_url" content="{{ site_url }}static/assets/og-exam-format.png?v={{ asset_version }}">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="{{ app_title }}：{{ app_description }}">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ app_title }}">
+  <meta name="twitter:description" content="{{ app_description }}">
+  <meta name="twitter:image" content="{{ site_url }}static/assets/og-exam-format.png?v={{ asset_version }}">
+
+  <link rel="stylesheet" href="static/styles.css?v={{ app_version }}">
+</head>
+<body>
+  <main class="app-shell">
+    <section class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">{{ school_name }}</p>
+          <h1>{{ app_title }}</h1>
+        </div>
+        <button id="clearBtn" class="icon-button" title="清除暫存檔" type="button">⟲</button>
+      </header>
+
+      <form id="convertForm" class="editor">
+        <section class="panel upload-panel">
+          <label class="dropzone" for="fileInput">
+            <input id="fileInput" name="file" type="file" accept=".doc,.docx" required>
+            <span class="upload-icon">↑</span>
+            <strong id="fileLabel">拖曳或選擇考卷 Word 檔</strong>
+            <small>.docx 可直接轉換；.doc 會嘗試透過本機 Word 自動轉成 .docx</small>
+          </label>
+
+          <div class="profile-grid" role="radiogroup" aria-label="格式版本">
+            {% for key, profile in profiles.items() %}
+            <label class="profile-card">
+              <input type="radio" name="profile" value="{{ key }}" {% if key == "b4-horizontal" %}checked{% endif %}>
+              <span>{{ profile.label }}</span>
+              <small>{{ profile.columns }} 欄 · 欄距 {{ profile.column_space }} twips</small>
+            </label>
+            {% endfor %}
+          </div>
+        </section>
+
+        <section class="panel fields-panel">
+          <div class="field-row wide">
+            <label>學校</label>
+            <input name="school" value="桃園市龍潭區石門國民小學">
+          </div>
+          <div class="field-row">
+            <label>學年度 / 學期</label>
+            <input name="semester" value="一百一十五學年度上學期">
+          </div>
+          <div class="field-row">
+            <label>考試名稱</label>
+            <input name="exam_name" value="定期評量">
+          </div>
+          <div class="field-row">
+            <label>科別</label>
+            <input name="subject" placeholder="國語">
+          </div>
+          <div class="field-row">
+            <label>命題教師</label>
+            <input name="teacher" placeholder="阿凱老師">
+          </div>
+          <div class="field-row">
+            <label>年級</label>
+            <input name="grade" placeholder="五年">
+          </div>
+          <div class="field-row">
+            <label>班級</label>
+            <input name="class_name" placeholder="甲班">
+          </div>
+          <div class="field-row">
+            <label>時間</label>
+            <input name="duration" placeholder="40 分鐘">
+          </div>
+          <div class="field-row">
+            <label>目標頁數</label>
+            <input name="target_pages" value="2" inputmode="numeric">
+          </div>
+        </section>
+
+        <section class="actions">
+          <button id="analyzeBtn" type="button" class="secondary">分析原始檔</button>
+          <button id="convertBtn" type="submit" class="primary">校正並輸出 Word</button>
+        </section>
+      </form>
+    </section>
+
+    <aside class="status-panel">
+      <h2>轉換狀態</h2>
+      <div id="status" class="status idle">尚未選擇檔案</div>
+      <div id="pageBadge" class="page-badge" hidden></div>
+      <img id="pdfPreview" class="pdf-preview" alt="PDF 第一頁預覽" hidden>
+      <div id="preview" class="preview"></div>
+      <div class="download-row">
+        <a id="downloadLink" class="download" href="#" hidden>下載校正後 DOCX</a>
+        <a id="pdfLink" class="download secondary-download" href="#" hidden>下載 PDF</a>
+      </div>
+      <div id="report" class="report" hidden></div>
+      <div class="rule-list">
+        <h3>固定規則</h3>
+        <p>B4/A4 頁面尺寸、雙欄、欄距、頁邊距、表頭、中文字型、段落行距與題號縮排會重新套用；若可匯出 PDF，會同步檢查頁數。</p>
+      </div>
+    </aside>
+  </main>
+  <script src="static/app.js?v={{ app_version }}"></script>
+  <script src="static/sw-update.js?v={{ app_version }}"></script>
+</body>
+</html>

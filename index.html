@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-Hant" data-app-version="2026.07.06-1">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>考卷格式自動校正系統</title>
+  <meta name="description" content="固定版面、頁數檢查、Word 與 PDF 輸出的考卷格式標準化工具。">
+  <meta name="theme-color" content="#246b54">
+  <meta name="application-name" content="考卷格式自動校正系統">
+  <meta name="apple-mobile-web-app-title" content="考卷格式自動校正系統">
+
+  <link rel="canonical" href="https://cagoooo.github.io/exam-format-app/">
+  <link rel="icon" href="static/assets/favicon.ico" sizes="any">
+  <link rel="icon" type="image/svg+xml" href="static/assets/favicon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="static/assets/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="static/assets/favicon-16.png">
+  <link rel="apple-touch-icon" href="static/assets/apple-touch-icon.png">
+  <link rel="manifest" href="static/manifest.webmanifest">
+
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="zh_TW">
+  <meta property="og:site_name" content="桃園市龍潭區石門國民小學">
+  <meta property="og:url" content="https://cagoooo.github.io/exam-format-app/">
+  <meta property="og:title" content="考卷格式自動校正系統">
+  <meta property="og:description" content="固定版面、頁數檢查、Word 與 PDF 輸出的考卷格式標準化工具。">
+  <meta property="og:image" content="https://cagoooo.github.io/exam-format-app/static/assets/og-exam-format.png?v=20260706-og1">
+  <meta property="og:image:secure_url" content="https://cagoooo.github.io/exam-format-app/static/assets/og-exam-format.png?v=20260706-og1">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="考卷格式自動校正系統：固定版面、頁數檢查、Word 與 PDF 輸出">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="考卷格式自動校正系統">
+  <meta name="twitter:description" content="固定版面、頁數檢查、Word 與 PDF 輸出的考卷格式標準化工具。">
+  <meta name="twitter:image" content="https://cagoooo.github.io/exam-format-app/static/assets/og-exam-format.png?v=20260706-og1">
+
+  <link rel="stylesheet" href="static/styles.css?v=2026.07.06-1">
+  <style>
+    .pages-note {
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 16px;
+      line-height: 1.7;
+    }
+    .pages-note strong {
+      color: var(--accent-strong);
+    }
+    .static-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .static-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      border: 1px solid var(--accent);
+      padding: 0 16px;
+      color: #fff;
+      background: var(--accent);
+      text-decoration: none;
+      font-weight: 700;
+    }
+    .static-link.secondary {
+      color: var(--accent-strong);
+      background: #fff;
+    }
+  </style>
+</head>
+<body>
+  <main class="app-shell">
+    <section class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">桃園市龍潭區石門國民小學</p>
+          <h1>考卷格式自動校正系統</h1>
+        </div>
+      </header>
+
+      <section class="editor">
+        <div class="pages-note">
+          <strong>GitHub Pages 靜態展示版已上線。</strong>
+          <p>這個頁面可直接從 GitHub 開啟，並已支援 favicon、LINE / Facebook 預覽圖與 Service Worker 更新提示。</p>
+          <p>完整的 Word / PDF 轉換功能需要 Python Flask、Microsoft Word COM 與本機檔案處理能力；GitHub Pages 不能執行後端程式，所以請在本機啟動完整 APP 進行實際轉換。</p>
+          <div class="static-actions">
+            <a class="static-link" href="https://github.com/cagoooo/exam-format-app">查看 GitHub 原始碼</a>
+            <a class="static-link secondary" href="README.md">查看啟動說明</a>
+          </div>
+        </div>
+
+        <section class="panel upload-panel">
+          <label class="dropzone">
+            <span class="upload-icon">↑</span>
+            <strong>本機完整版可上傳 Word 考卷</strong>
+            <small>支援 .docx / .doc、B4/A4 雙欄模板、PDF 頁數檢查與兩頁鎖定。</small>
+          </label>
+          <div class="profile-grid">
+            <div class="profile-card"><span>B4 橫式雙欄</span><small>雙欄 · 固定欄距與頁邊距</small></div>
+            <div class="profile-card"><span>B4 直式雙欄</span><small>直式評量範本</small></div>
+            <div class="profile-card"><span>A4 橫式雙欄</span><small>小考與平時測驗</small></div>
+            <div class="profile-card"><span>A4 直式雙欄</span><small>直式 A4 範本</small></div>
+          </div>
+        </section>
+      </section>
+    </section>
+
+    <aside class="status-panel">
+      <h2>目前能力</h2>
+      <div class="status ok">靜態展示、社群分享卡片、favicon、PWA 更新提示已可在線上使用。</div>
+      <div class="rule-list">
+        <h3>完整轉換版</h3>
+        <p>請 clone GitHub repo 後執行 <code>python app.py</code>，再開啟 <code>http://127.0.0.1:5127</code>。</p>
+      </div>
+    </aside>
+  </main>
+  <script src="static/sw-update.js?v=2026.07.06-1"></script>
+</body>
+</html>

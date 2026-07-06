@@ -1,0 +1,7 @@
+__pycache__/
+uploads/*
+generated/*
+!uploads/.gitkeep
+!generated/.gitkeep
+*.pyc
+*.tmp
