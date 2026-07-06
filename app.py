@@ -253,6 +253,7 @@ def iter_docx_blocks(path: Path) -> list[dict]:
         if child.tag == qn("w:p"):
             paragraph = Paragraph(child, doc)
             text = normalize_text(paragraph.text)
+            has_special_inline = bool(child.xpath(".//m:oMath | .//m:oMathPara | .//w:ruby"))
             runs = []
             images = []
             for run in paragraph.runs:
@@ -275,13 +276,25 @@ def iter_docx_blocks(path: Path) -> list[dict]:
                         continue
                     images.append(
                         {
+                            "rel_id": rel_id,
                             "blob": part.blob,
                             "content_type": part.content_type,
                             "filename": Path(part.partname).name,
                         }
                     )
-            if text or images:
-                blocks.append({"type": "paragraph", "text": text, "runs": runs, "images": images})
+            if text or images or has_special_inline:
+                blocks.append(
+                    {
+                        "type": "paragraph",
+                        "text": text,
+                        "runs": runs,
+                        "images": images,
+                        "xml": deepcopy(child) if has_special_inline else None,
+                        "preserve_xml": has_special_inline,
+                        "has_formula": bool(child.xpath(".//m:oMath | .//m:oMathPara")),
+                        "has_ruby": bool(child.xpath(".//w:ruby")),
+                    }
+                )
         elif child.tag == qn("w:tbl"):
             table = Table(child, doc)
             rows: list[list[str]] = []
@@ -389,6 +402,35 @@ def add_block_images(document: Document, profile: ExamProfile, images: list[dict
         except Exception:
             fallback = paragraph.add_run(f"[圖片無法插入：{image.get('filename', 'unknown')}]")
             set_run_font(fallback, profile.font, max(8, profile.body_size - 1))
+
+
+def insert_paragraph_xml(document: Document, paragraph_xml, profile: ExamProfile, images: list[dict] | None = None) -> Paragraph:
+    rel_id_map = {}
+    for image in images or []:
+        old_rel_id = image.get("rel_id")
+        if not old_rel_id:
+            continue
+        new_rel_id, _image = document.part.get_or_add_image(BytesIO(image["blob"]))
+        rel_id_map[old_rel_id] = new_rel_id
+    for blip in paragraph_xml.xpath(".//a:blip"):
+        old_rel_id = blip.get(qn("r:embed"))
+        if old_rel_id in rel_id_map:
+            blip.set(qn("r:embed"), rel_id_map[old_rel_id])
+    body = document._body._element
+    sect_pr = body.sectPr
+    if sect_pr is not None:
+        body.insert(body.index(sect_pr), paragraph_xml)
+    else:
+        body.append(paragraph_xml)
+    paragraph = Paragraph(paragraph_xml, document)
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+    paragraph.paragraph_format.line_spacing = Pt(profile.line_spacing)
+    for run in paragraph.runs:
+        if run.text:
+            set_run_font(run, profile.font, profile.body_size)
+    return paragraph
 
 
 def insert_table_xml(document: Document, table_xml, profile: ExamProfile, images: dict | None = None) -> Table:
@@ -523,6 +565,9 @@ def add_body(document: Document, profile: ExamProfile, blocks: list[dict]) -> No
 
     for block in blocks:
         if block["type"] == "paragraph":
+            if block.get("preserve_xml") and block.get("xml") is not None:
+                insert_paragraph_xml(document, deepcopy(block["xml"]), profile, block.get("images"))
+                continue
             text = normalize_text(block.get("text", ""))
             if text:
                 for line in text.splitlines():
@@ -655,7 +700,12 @@ def build_exam_docx(source: Path, output: Path, profile: ExamProfile, form: dict
     add_body(document, profile, blocks)
     add_document_guards(document)
     document.save(str(output))
-    return {"paragraphs": sum(1 for b in blocks if b["type"] == "paragraph"), "tables": sum(1 for b in blocks if b["type"] == "table")}
+    return {
+        "paragraphs": sum(1 for b in blocks if b["type"] == "paragraph"),
+        "tables": sum(1 for b in blocks if b["type"] == "table"),
+        "formulas": sum(1 for b in blocks if b.get("has_formula")),
+        "ruby": sum(1 for b in blocks if b.get("has_ruby")),
+    }
 
 
 def build_with_page_check(source: Path, output: Path, profile: ExamProfile, form: dict, target_pages: int | None = None) -> dict:
