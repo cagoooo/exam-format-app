@@ -7,7 +7,9 @@ import shutil
 import subprocess
 import time
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass, replace
+from io import BytesIO
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_file
@@ -21,7 +23,7 @@ from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Pt, Twips
+from docx.shared import Inches, Pt, Twips
 
 
 ROOT = Path(__file__).resolve().parent
@@ -251,12 +253,11 @@ def iter_docx_blocks(path: Path) -> list[dict]:
         if child.tag == qn("w:p"):
             paragraph = Paragraph(child, doc)
             text = normalize_text(paragraph.text)
-            if text:
-                runs = []
-                for run in paragraph.runs:
-                    run_text = run.text
-                    if not run_text:
-                        continue
+            runs = []
+            images = []
+            for run in paragraph.runs:
+                run_text = run.text
+                if run_text:
                     runs.append(
                         {
                             "text": run_text,
@@ -265,7 +266,22 @@ def iter_docx_blocks(path: Path) -> list[dict]:
                             "underline": bool(run.underline),
                         }
                     )
-                blocks.append({"type": "paragraph", "text": text, "runs": runs})
+                for blip in run._element.xpath(".//a:blip"):
+                    rel_id = blip.get(qn("r:embed"))
+                    if not rel_id:
+                        continue
+                    part = paragraph.part.related_parts.get(rel_id)
+                    if not part:
+                        continue
+                    images.append(
+                        {
+                            "blob": part.blob,
+                            "content_type": part.content_type,
+                            "filename": Path(part.partname).name,
+                        }
+                    )
+            if text or images:
+                blocks.append({"type": "paragraph", "text": text, "runs": runs, "images": images})
         elif child.tag == qn("w:tbl"):
             table = Table(child, doc)
             rows: list[list[str]] = []
@@ -274,7 +290,15 @@ def iter_docx_blocks(path: Path) -> list[dict]:
                 if any(cells):
                     rows.append(cells)
             if rows:
-                blocks.append({"type": "table", "rows": rows})
+                table_images = {}
+                for blip in child.xpath(".//a:blip"):
+                    rel_id = blip.get(qn("r:embed"))
+                    if not rel_id:
+                        continue
+                    part = doc.part.related_parts.get(rel_id)
+                    if part:
+                        table_images[rel_id] = {"blob": part.blob, "content_type": part.content_type}
+                blocks.append({"type": "table", "rows": rows, "xml": deepcopy(child), "images": table_images})
 
     return blocks
 
@@ -332,6 +356,72 @@ def add_styled_runs(paragraph, runs: list[dict], fallback_text: str, font: str, 
         run.bold = source_run.get("bold", False)
         run.italic = source_run.get("italic", False)
         run.underline = source_run.get("underline", False)
+
+
+def content_width_inches(profile: ExamProfile) -> float:
+    total_twips = profile.width - profile.margins["left"] - profile.margins["right"]
+    if profile.columns > 1:
+        total_twips = (total_twips - profile.column_space * (profile.columns - 1)) / profile.columns
+    return max(1.0, total_twips / 1440)
+
+
+def image_display_width_inches(image: dict, profile: ExamProfile) -> float:
+    max_width = content_width_inches(profile)
+    try:
+        from PIL import Image
+
+        with Image.open(BytesIO(image["blob"])) as img:
+            native_width = img.width / 96
+            return min(max_width, max(1.0, native_width))
+    except Exception:
+        return max_width
+
+
+def add_block_images(document: Document, profile: ExamProfile, images: list[dict]) -> None:
+    for image in images:
+        paragraph = document.add_paragraph()
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        paragraph.paragraph_format.space_before = Pt(2)
+        paragraph.paragraph_format.space_after = Pt(2)
+        run = paragraph.add_run()
+        try:
+            run.add_picture(BytesIO(image["blob"]), width=Inches(image_display_width_inches(image, profile)))
+        except Exception:
+            fallback = paragraph.add_run(f"[圖片無法插入：{image.get('filename', 'unknown')}]")
+            set_run_font(fallback, profile.font, max(8, profile.body_size - 1))
+
+
+def insert_table_xml(document: Document, table_xml, profile: ExamProfile, images: dict | None = None) -> Table:
+    for blip in table_xml.xpath(".//a:blip"):
+        old_rel_id = blip.get(qn("r:embed"))
+        if not old_rel_id or not images or old_rel_id not in images:
+            continue
+        new_rel_id, _image = document.part.get_or_add_image(BytesIO(images[old_rel_id]["blob"]))
+        blip.set(qn("r:embed"), new_rel_id)
+    body = document._body._element
+    sect_pr = body.sectPr
+    if sect_pr is not None:
+        body.insert(body.index(sect_pr), table_xml)
+    else:
+        body.append(table_xml)
+    table = Table(table_xml, document)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = True
+    tbl_pr = table._tbl.tblPr
+    tbl_w = tbl_pr.find(qn("w:tblW"))
+    if tbl_w is None:
+        tbl_w = OxmlElement("w:tblW")
+        tbl_pr.append(tbl_w)
+    tbl_w.set(qn("w:type"), "pct")
+    tbl_w.set(qn("w:w"), "5000")
+    for row in table.rows:
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.space_before = Pt(0)
+                paragraph.paragraph_format.space_after = Pt(0)
+                for run in paragraph.runs:
+                    set_run_font(run, profile.font, profile.table_font_size)
+    return table
 
 
 def set_paragraph_font(paragraph, font: str, size: int, bold: bool = False) -> None:
@@ -433,24 +523,30 @@ def add_body(document: Document, profile: ExamProfile, blocks: list[dict]) -> No
 
     for block in blocks:
         if block["type"] == "paragraph":
-            for line in block["text"].splitlines():
-                text = normalize_text(line)
-                if not text:
-                    continue
-                p = document.add_paragraph()
-                p.paragraph_format.space_before = Pt(0)
-                p.paragraph_format.space_after = Pt(0)
-                p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
-                p.paragraph_format.line_spacing = Pt(profile.line_spacing)
-                if looks_like_question(text):
-                    p.paragraph_format.first_line_indent = Twips(-280)
-                    p.paragraph_format.left_indent = Twips(280)
-                    size = profile.question_size
-                else:
-                    p.paragraph_format.first_line_indent = Twips(0)
-                    size = profile.body_size
-                add_styled_runs(p, block.get("runs", []), text, profile.font, size)
+            text = normalize_text(block.get("text", ""))
+            if text:
+                for line in text.splitlines():
+                    text_line = normalize_text(line)
+                    if not text_line:
+                        continue
+                    p = document.add_paragraph()
+                    p.paragraph_format.space_before = Pt(0)
+                    p.paragraph_format.space_after = Pt(0)
+                    p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+                    p.paragraph_format.line_spacing = Pt(profile.line_spacing)
+                    if looks_like_question(text_line):
+                        p.paragraph_format.first_line_indent = Twips(-280)
+                        p.paragraph_format.left_indent = Twips(280)
+                        size = profile.question_size
+                    else:
+                        p.paragraph_format.first_line_indent = Twips(0)
+                        size = profile.body_size
+                    add_styled_runs(p, block.get("runs", []), text_line, profile.font, size)
+            add_block_images(document, profile, block.get("images", []))
         elif block["type"] == "table":
+            if block.get("xml") is not None:
+                insert_table_xml(document, deepcopy(block["xml"]), profile, block.get("images"))
+                continue
             rows = block["rows"]
             cols = max(len(row) for row in rows)
             table = document.add_table(rows=len(rows), cols=cols)
