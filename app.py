@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -23,8 +24,9 @@ from docx.shared import Pt, Twips
 
 
 ROOT = Path(__file__).resolve().parent
-UPLOAD_DIR = ROOT / "uploads"
-GENERATED_DIR = ROOT / "generated"
+DATA_DIR = Path(os.environ.get("EXAM_FORMAT_DATA_DIR", ROOT))
+UPLOAD_DIR = DATA_DIR / "uploads"
+GENERATED_DIR = DATA_DIR / "generated"
 CONFIG_DIR = ROOT / "config"
 PROFILE_PATH = CONFIG_DIR / "profiles.json"
 VERSION_PATH = ROOT / "version.json"
@@ -92,6 +94,27 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 
+@app.after_request
+def add_cors_headers(response):
+    origin = request.headers.get("Origin")
+    allowed_origins = {
+        "https://cagoooo.github.io",
+        "http://127.0.0.1:5127",
+        "http://localhost:5127",
+    }
+    if origin in allowed_origins or os.environ.get("ALLOW_ANY_ORIGIN") == "1":
+        response.headers["Access-Control-Allow-Origin"] = origin or "*"
+        response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
+
+def ensure_work_dirs() -> None:
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+
+
 def allowed_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_EXT
 
@@ -100,6 +123,47 @@ def safe_upload_name(filename: str) -> str:
     ext = Path(filename).suffix.lower()
     stem = secure_filename(Path(filename).stem) or "exam"
     return f"{stem}-{uuid.uuid4().hex[:8]}{ext}"
+
+
+def find_soffice() -> str | None:
+    for command in ("soffice", "libreoffice"):
+        resolved = shutil.which(command)
+        if resolved:
+            return resolved
+    return None
+
+
+def convert_with_libreoffice(path: Path, target_ext: str) -> Path:
+    soffice = find_soffice()
+    if not soffice:
+        raise RuntimeError("線上轉檔需要 LibreOffice；目前執行環境找不到 soffice/libreoffice。")
+
+    out_dir = path.parent
+    before = {p.name for p in out_dir.glob(f"*{target_ext}")}
+    subprocess.run(
+        [
+            soffice,
+            "--headless",
+            "--nologo",
+            "--nofirststartwizard",
+            "--convert-to",
+            target_ext.lstrip("."),
+            "--outdir",
+            str(out_dir),
+            str(path),
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=120,
+    )
+    expected = path.with_suffix(target_ext)
+    if expected.exists():
+        return expected
+    after = [p for p in out_dir.glob(f"*{target_ext}") if p.name not in before]
+    if after:
+        return after[0]
+    raise RuntimeError(f"LibreOffice 已執行，但沒有產生 {target_ext} 檔。")
 
 
 def convert_doc_to_docx(path: Path) -> Path:
@@ -114,8 +178,8 @@ def convert_doc_to_docx(path: Path) -> Path:
         doc.Close(False)
         word.Quit()
         return out
-    except Exception as exc:  # pragma: no cover - depends on local Word install.
-        raise RuntimeError("這台電腦目前無法自動轉換 .doc，請先用 Word 另存為 .docx 後再上傳。") from exc
+    except Exception:
+        return convert_with_libreoffice(path, ".docx")
 
 
 def iter_docx_blocks(path: Path) -> list[dict]:
@@ -356,8 +420,8 @@ def export_docx_to_pdf(docx_path: Path) -> Path:
         doc.Close(False)
         word.Quit()
         return pdf_path
-    except Exception as exc:  # pragma: no cover - depends on local Word install.
-        raise RuntimeError("無法自動匯出 PDF；請確認這台電腦已安裝 Microsoft Word。") from exc
+    except Exception:
+        return convert_with_libreoffice(docx_path, ".pdf")
 
 
 def count_pdf_pages(pdf_path: Path) -> int:
@@ -498,6 +562,9 @@ def version_json():
 
 @app.post("/api/analyze")
 def analyze():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    ensure_work_dirs()
     file = request.files.get("file")
     if not file or not allowed_file(file.filename):
         return jsonify({"error": "請上傳 .doc 或 .docx 檔案。"}), 400
@@ -514,6 +581,9 @@ def analyze():
 
 @app.post("/api/convert")
 def convert():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    ensure_work_dirs()
     file = request.files.get("file")
     profile_key = request.form.get("profile", "b4-horizontal")
     if profile_key not in PROFILES:
@@ -573,6 +643,7 @@ def clear_generated():
 
 
 if __name__ == "__main__":
-    UPLOAD_DIR.mkdir(exist_ok=True)
-    GENERATED_DIR.mkdir(exist_ok=True)
-    app.run(host="127.0.0.1", port=5127, debug=True)
+    ensure_work_dirs()
+    port = int(os.environ.get("PORT", "5127"))
+    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
+    app.run(host="0.0.0.0", port=port, debug=debug)

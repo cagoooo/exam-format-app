@@ -39,6 +39,15 @@
 | 防快取 | 已完成 | Flask `/sw.js` 與 `/version.json` 回傳 `no-store` |
 | 版本 bump | 已完成 | 新增 `scripts/bump-version.ps1` 同步更新 `version.json` 與 `sw.js` |
 
+## 2026-07-06 線上完整轉換部署
+
+| 項目 | 狀態 | 完成內容 |
+|---|---:|---|
+| GitHub Pages 前端 | 已完成 | 靜態首頁恢復完整上傳轉換介面 |
+| Cloud Run API | 已完成 | 部署 `exam-format-api`，使用 LibreOffice headless 轉 `.doc/.docx` 與 PDF |
+| 前後端串接 | 已完成 | GitHub Pages 呼叫 `https://exam-format-api-142975838924.asia-east1.run.app` |
+| 線上實測 | 已完成 | 範例 Word 線上分析成功、轉換 DOCX/PDF 成功、PDF 頁數讀取成功 |
+
 ## 一、目前進度表
 
 | 模組 | 目前狀態 | 已完成內容 | 驗證狀態 | 備註 |

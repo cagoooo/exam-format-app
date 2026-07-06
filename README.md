@@ -16,6 +16,8 @@ http://127.0.0.1:5127
 
 ## 目前支援
 
+- GitHub Pages 線上版：可直接上傳 Word 考卷並呼叫 Cloud Run API 轉換。
+- Cloud Run API：使用 LibreOffice headless 處理 `.doc/.docx` 與 PDF 輸出。
 - `.docx`：直接讀取內容並輸出校正後 Word。
 - `.doc`：若本機已安裝 Microsoft Word，會透過 Word COM 自動轉為 `.docx`；若沒有 Word，請先手動另存成 `.docx`。
 - 格式 profile：B4 橫式雙欄、B4 直式雙欄、A4 橫式雙欄、A4 直式雙欄。
@@ -73,6 +75,20 @@ scripts/bump-version.ps1
 - `version.json` 提供前端輪詢比對。
 - `static/sw-update.js` 監聽 `updatefound`、`controllerchange`、`SW_ACTIVATED`，並在偵測到新版時提示使用者重新整理。
 - Flask 的 `/sw.js` 與 `/version.json` 會回傳 `no-store`，避免本機開發時被快取卡住。
+
+## 線上網址
+
+GitHub Pages：
+
+```text
+https://cagoooo.github.io/exam-format-app/
+```
+
+Cloud Run API：
+
+```text
+https://exam-format-api-142975838924.asia-east1.run.app
+```
 
 ## 測試
 

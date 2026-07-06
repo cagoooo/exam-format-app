@@ -10,6 +10,17 @@ const pageBadge = document.querySelector("#pageBadge");
 const report = document.querySelector("#report");
 const analyzeBtn = document.querySelector("#analyzeBtn");
 const clearBtn = document.querySelector("#clearBtn");
+const API_BASE = (window.EXAM_FORMAT_API_BASE || "").replace(/\/$/, "");
+
+function apiUrl(path) {
+  if (!API_BASE) return path;
+  return `${API_BASE}${path}`;
+}
+
+function assetUrl(path) {
+  if (!path || !API_BASE || !path.startsWith("/")) return path;
+  return `${API_BASE}${path}`;
+}
 
 function setStatus(message, mode = "idle") {
   statusBox.textContent = message;
@@ -36,7 +47,7 @@ analyzeBtn.addEventListener("click", async () => {
   }
   setStatus("正在分析原始檔內容...", "busy");
   preview.innerHTML = "";
-  const res = await fetch("/api/analyze", { method: "POST", body: currentFormData() });
+  const res = await fetch(apiUrl("/api/analyze"), { method: "POST", body: currentFormData() });
   const json = await res.json();
   if (!res.ok) {
     setStatus(json.error || "分析失敗。", "error");
@@ -54,7 +65,7 @@ form.addEventListener("submit", async (event) => {
   }
   setStatus("正在套用固定格式並產生 Word...", "busy");
   resetResult({ keepPreview: true });
-  const res = await fetch("/api/convert", { method: "POST", body: currentFormData() });
+  const res = await fetch(apiUrl("/api/convert"), { method: "POST", body: currentFormData() });
   const json = await res.json();
   if (!res.ok) {
     setStatus(json.error || "轉換失敗。", "error");
@@ -63,14 +74,14 @@ form.addEventListener("submit", async (event) => {
   const pageText = json.pdf_pages ? `，PDF ${json.pdf_pages} 頁` : "";
   const compactText = json.compact_level ? `，已套用第 ${json.compact_level} 級壓縮` : "";
   setStatus(`轉換完成：段落 ${json.stats.paragraphs}、表格 ${json.stats.tables}${pageText}${compactText}`, "ok");
-  downloadLink.href = json.download;
+  downloadLink.href = assetUrl(json.download);
   downloadLink.hidden = false;
   if (json.pdf) {
-    pdfLink.href = json.pdf;
+    pdfLink.href = assetUrl(json.pdf);
     pdfLink.hidden = false;
   }
   if (json.preview) {
-    pdfPreview.src = json.preview;
+    pdfPreview.src = assetUrl(json.preview);
     pdfPreview.hidden = false;
   }
   if (json.pdf_pages) {
@@ -86,7 +97,7 @@ form.addEventListener("submit", async (event) => {
 });
 
 clearBtn.addEventListener("click", async () => {
-  await fetch("/api/clear", { method: "POST" });
+  await fetch(apiUrl("/api/clear"), { method: "POST" });
   resetResult();
   setStatus("暫存檔已清除。", "ok");
 });
