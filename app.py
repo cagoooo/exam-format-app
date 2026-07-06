@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -31,6 +32,8 @@ CONFIG_DIR = ROOT / "config"
 PROFILE_PATH = CONFIG_DIR / "profiles.json"
 VERSION_PATH = ROOT / "version.json"
 ALLOWED_EXT = {".doc", ".docx"}
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+JOB_TTL_SECONDS = int(os.environ.get("JOB_TTL_SECONDS", "1800"))
 SCHOOL_NAME = "桃園市龍潭區石門國民小學"
 APP_TITLE = "考卷格式自動校正系統"
 APP_DESCRIPTION = "固定版面、頁數檢查、Word 與 PDF 輸出的考卷格式標準化工具。"
@@ -91,7 +94,7 @@ PROFILES: dict[str, ExamProfile] = load_profiles()
 
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
 
 @app.after_request
@@ -113,6 +116,58 @@ def add_cors_headers(response):
 def ensure_work_dirs() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def cleanup_expired_jobs() -> None:
+    now = time.time()
+    for root in (UPLOAD_DIR, GENERATED_DIR):
+        if not root.exists():
+            continue
+        for job_dir in root.iterdir():
+            if not job_dir.is_dir():
+                continue
+            try:
+                age = now - job_dir.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if age > JOB_TTL_SECONDS:
+                shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def create_job_dirs() -> tuple[str, Path, Path]:
+    ensure_work_dirs()
+    cleanup_expired_jobs()
+    job_id = uuid.uuid4().hex
+    upload_dir = UPLOAD_DIR / job_id
+    generated_dir = GENERATED_DIR / job_id
+    upload_dir.mkdir(parents=True, exist_ok=False)
+    generated_dir.mkdir(parents=True, exist_ok=False)
+    return job_id, upload_dir, generated_dir
+
+
+def resolve_job_file(root: Path, job_id: str, filename: str) -> Path | None:
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+        return None
+    job_dir = (root / job_id).resolve()
+    root_resolved = root.resolve()
+    if job_dir.parent != root_resolved or not job_dir.exists():
+        return None
+    if time.time() - job_dir.stat().st_mtime > JOB_TTL_SECONDS:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        return None
+    path = (job_dir / filename).resolve()
+    if path.parent != job_dir or not path.exists():
+        return None
+    os.utime(job_dir, None)
+    return path
+
+
+def public_file_path(kind: str, job_id: str, filename: str) -> str:
+    return f"/{kind}/{job_id}/{filename}"
+
+
+def error_response(message: str, status: int = 400, code: str = "REQUEST_ERROR", details: list[str] | None = None):
+    return jsonify({"ok": False, "error": message, "code": code, "details": details or []}), status
 
 
 def allowed_file(filename: str) -> bool:
@@ -140,23 +195,29 @@ def convert_with_libreoffice(path: Path, target_ext: str) -> Path:
 
     out_dir = path.parent
     before = {p.name for p in out_dir.glob(f"*{target_ext}")}
-    subprocess.run(
-        [
-            soffice,
-            "--headless",
-            "--nologo",
-            "--nofirststartwizard",
-            "--convert-to",
-            target_ext.lstrip("."),
-            "--outdir",
-            str(out_dir),
-            str(path),
-        ],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=120,
-    )
+    try:
+        subprocess.run(
+            [
+                soffice,
+                "--headless",
+                "--nologo",
+                "--nofirststartwizard",
+                "--convert-to",
+                target_ext.lstrip("."),
+                "--outdir",
+                str(out_dir),
+                str(path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("轉檔逾時。檔案可能太大、內容過於複雜，請先移除大型圖片或分成較小份考卷後再試。") from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else ""
+        raise RuntimeError(f"LibreOffice 轉檔失敗。請確認檔案沒有加密、損毀或仍被 Word 開啟。{stderr[:200]}") from exc
     expected = path.with_suffix(target_ext)
     if expected.exists():
         return expected
@@ -567,16 +628,17 @@ def analyze():
     ensure_work_dirs()
     file = request.files.get("file")
     if not file or not allowed_file(file.filename):
-        return jsonify({"error": "請上傳 .doc 或 .docx 檔案。"}), 400
-    upload_path = UPLOAD_DIR / safe_upload_name(file.filename)
+        return error_response("請上傳 .doc 或 .docx 檔案。", 400, "INVALID_FILE")
+    job_id, upload_dir, _generated_dir = create_job_dirs()
+    upload_path = upload_dir / safe_upload_name(file.filename)
     file.save(upload_path)
     try:
         read_path = convert_doc_to_docx(upload_path) if upload_path.suffix.lower() == ".doc" else upload_path
         blocks = iter_docx_blocks(read_path)
         preview = preview_blocks(blocks)
-        return jsonify({"ok": True, "filename": file.filename, "blocks": len(blocks), "preview": preview})
+        return jsonify({"ok": True, "job_id": job_id, "expires_in_seconds": JOB_TTL_SECONDS, "filename": file.filename, "blocks": len(blocks), "preview": preview})
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 400
+        return error_response("分析失敗，請確認 Word 檔沒有加密或損毀。", 400, "ANALYZE_FAILED", [str(exc)])
 
 
 @app.post("/api/convert")
@@ -587,28 +649,31 @@ def convert():
     file = request.files.get("file")
     profile_key = request.form.get("profile", "b4-horizontal")
     if profile_key not in PROFILES:
-        return jsonify({"error": "找不到指定的格式設定。"}), 400
+        return error_response("找不到指定的格式設定，請重新選擇 B4/A4 或直式/橫式模板。", 400, "INVALID_PROFILE")
     if not file or not allowed_file(file.filename):
-        return jsonify({"error": "請上傳 .doc 或 .docx 檔案。"}), 400
+        return error_response("請上傳 .doc 或 .docx 檔案。", 400, "INVALID_FILE")
 
-    upload_path = UPLOAD_DIR / safe_upload_name(file.filename)
+    job_id, upload_dir, generated_dir = create_job_dirs()
+    upload_path = upload_dir / safe_upload_name(file.filename)
     file.save(upload_path)
     out_name = f"{Path(file.filename).stem}-格式校正-{uuid.uuid4().hex[:6]}.docx"
-    output_path = GENERATED_DIR / out_name
+    output_path = generated_dir / out_name
     target_pages_raw = request.form.get("target_pages", "").strip()
     target_pages = int(target_pages_raw) if target_pages_raw.isdigit() else None
 
     try:
         result = build_with_page_check(upload_path, output_path, PROFILES[profile_key], request.form, target_pages)
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 400
+        return error_response("轉換失敗。請確認檔案沒有加密、損毀，或嘗試先移除大型圖片後再上傳。", 400, "CONVERT_FAILED", [str(exc)])
 
     return jsonify(
         {
             "ok": True,
-            "download": f"/download/{out_name}",
-            "pdf": f"/download/{result['pdf']}" if result["pdf"] else None,
-            "preview": f"/preview/{result['preview']}" if result["preview"] else None,
+            "job_id": job_id,
+            "expires_in_seconds": JOB_TTL_SECONDS,
+            "download": public_file_path("download", job_id, out_name),
+            "pdf": public_file_path("download", job_id, result["pdf"]) if result["pdf"] else None,
+            "preview": public_file_path("preview", job_id, result["preview"]) if result["preview"] else None,
             "stats": result["stats"],
             "pdf_pages": result["pdf_pages"],
             "compact_level": result["compact_level"],
@@ -618,19 +683,19 @@ def convert():
     )
 
 
-@app.get("/download/<path:filename>")
-def download(filename: str):
-    path = (GENERATED_DIR / filename).resolve()
-    if not path.exists() or path.parent != GENERATED_DIR.resolve():
-        return jsonify({"error": "檔案不存在。"}), 404
+@app.get("/download/<job_id>/<path:filename>")
+def download(job_id: str, filename: str):
+    path = resolve_job_file(GENERATED_DIR, job_id, filename)
+    if not path:
+        return error_response("檔案不存在或下載連結已過期，請重新轉換一次。", 404, "FILE_EXPIRED")
     return send_file(path, as_attachment=True, download_name=filename)
 
 
-@app.get("/preview/<path:filename>")
-def preview_file(filename: str):
-    path = (GENERATED_DIR / filename).resolve()
-    if not path.exists() or path.parent != GENERATED_DIR.resolve() or path.suffix.lower() != ".png":
-        return jsonify({"error": "預覽圖不存在。"}), 404
+@app.get("/preview/<job_id>/<path:filename>")
+def preview_file(job_id: str, filename: str):
+    path = resolve_job_file(GENERATED_DIR, job_id, filename)
+    if not path or path.suffix.lower() != ".png":
+        return error_response("預覽圖不存在或已過期，請重新轉換一次。", 404, "PREVIEW_EXPIRED")
     return send_file(path, mimetype="image/png")
 
 

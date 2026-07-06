@@ -28,6 +28,8 @@ http://127.0.0.1:5127
 - 批次驗證：可一次檢查五份範例檔的頁面尺寸、邊界、欄數與欄距。
 - 分享預覽：已設定 favicon、Apple touch icon、PWA manifest、LINE/Facebook Open Graph 與 Twitter Card meta。
 - Service Worker 更新提示：偵測到新版時會主動顯示「重新整理」提示，載入最新版本。
+- 線上檔案安全：每次轉換使用獨立 job id，下載與預覽連結約 30 分鐘內有效。
+- 線上端到端測試：可用腳本確認 Cloud Run API 的分析、轉換、下載仍正常。
 
 ## 社群分享與 GitHub Pages
 
@@ -98,6 +100,7 @@ python scripts\batch_verify_examples.py
 python scripts\generate_brand_assets.py
 node --check static\app.js
 node --check static\sw-update.js
+python scripts\e2e_online_api.py
 ```
 
 若要輸出 JSON：

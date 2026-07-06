@@ -1,4 +1,4 @@
 {
-  "version": "2026.07.06-2",
-  "notes": "接上 Cloud Run 線上轉換 API"
+  "version": "2026.07.06-3",
+  "notes": "加入 job id、暫存檔過期清理與線上端到端測試"
 }
