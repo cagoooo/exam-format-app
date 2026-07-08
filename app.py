@@ -407,6 +407,42 @@ def looks_like_question(text: str) -> bool:
     return bool(re.match(r"^([一二三四五六七八九十]+、|\d+[\.、)]|[（(]\d+[）)])", text.strip()))
 
 
+def looks_like_section_heading(text: str) -> bool:
+    stripped = text.strip()
+    if len(stripped) > 40:
+        return False
+    patterns = [
+        r"^[一二三四五六七八九十]+[、.．]",
+        r"^[壹貳參肆伍陸柒捌玖拾]+[、.．]",
+        r"^第[一二三四五六七八九十\d]+[大]?題",
+        r"^(閱讀|作文|聽力|選擇|填充|問答|計算|題組)",
+        r"^\d+[、.．)]",
+    ]
+    return any(re.match(pattern, stripped) for pattern in patterns)
+
+
+def set_on_off(parent, tag: str, enabled: bool = True) -> None:
+    if not enabled:
+        return
+    node = parent.find(qn(tag))
+    if node is None:
+        parent.append(OxmlElement(tag))
+
+
+def apply_paragraph_keep_options(paragraph: Paragraph, keep_next: bool = False, keep_lines: bool = False) -> None:
+    p_pr = paragraph._p.get_or_add_pPr()
+    set_on_off(p_pr, "w:keepNext", keep_next)
+    set_on_off(p_pr, "w:keepLines", keep_lines)
+
+
+def compact_table_cell_margin(compact_level: int) -> int:
+    return max(20, 60 - compact_level * 12)
+
+
+def compact_image_factor(compact_level: int) -> float:
+    return max(0.82, 1 - compact_level * 0.06)
+
+
 def set_cell_text(cell, text: str, font: str, size: int, bold: bool = False) -> None:
     cell.text = ""
     paragraph = cell.paragraphs[0]
@@ -443,27 +479,28 @@ def content_width_inches(profile: ExamProfile) -> float:
     return max(1.0, total_twips / 1440)
 
 
-def image_display_width_inches(image: dict, profile: ExamProfile) -> float:
+def image_display_width_inches(image: dict, profile: ExamProfile, compact_level: int = 0) -> float:
     max_width = content_width_inches(profile)
     try:
         from PIL import Image
 
         with Image.open(BytesIO(image["blob"])) as img:
             native_width = img.width / 96
-            return min(max_width, max(1.0, native_width))
+            return min(max_width, max(1.0, native_width)) * compact_image_factor(compact_level)
     except Exception:
-        return max_width
+        return max_width * compact_image_factor(compact_level)
 
 
-def add_block_images(document: Document, profile: ExamProfile, images: list[dict]) -> None:
+def add_block_images(document: Document, profile: ExamProfile, images: list[dict], compact_level: int = 0) -> None:
     for image in images:
         paragraph = document.add_paragraph()
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         paragraph.paragraph_format.space_before = Pt(2)
         paragraph.paragraph_format.space_after = Pt(2)
+        apply_paragraph_keep_options(paragraph, keep_lines=True)
         run = paragraph.add_run()
         try:
-            run.add_picture(BytesIO(image["blob"]), width=Inches(image_display_width_inches(image, profile)))
+            run.add_picture(BytesIO(image["blob"]), width=Inches(image_display_width_inches(image, profile, compact_level)))
         except Exception:
             fallback = paragraph.add_run(f"[圖片無法插入：{image.get('filename', 'unknown')}]")
             set_run_font(fallback, profile.font, max(8, profile.body_size - 1))
@@ -492,13 +529,45 @@ def insert_paragraph_xml(document: Document, paragraph_xml, profile: ExamProfile
     paragraph.paragraph_format.space_after = Pt(0)
     paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
     paragraph.paragraph_format.line_spacing = Pt(profile.line_spacing)
+    source_text = normalize_text(paragraph.text)
+    apply_paragraph_keep_options(
+        paragraph,
+        keep_next=looks_like_section_heading(source_text),
+        keep_lines=bool(block_text_len := len(source_text)) and block_text_len <= 180,
+    )
     for run in paragraph.runs:
         if run.text:
             set_run_font(run, profile.font, profile.body_size)
     return paragraph
 
 
-def insert_table_xml(document: Document, table_xml, profile: ExamProfile, images: dict | None = None) -> Table:
+def apply_table_keep_options(table: Table, repeat_header: bool = True) -> None:
+    for row_idx, row in enumerate(table.rows):
+        tr_pr = row._tr.get_or_add_trPr()
+        set_on_off(tr_pr, "w:cantSplit", True)
+        if row_idx == 0 and repeat_header:
+            set_on_off(tr_pr, "w:tblHeader", True)
+
+
+def apply_table_cell_margins(table: Table, compact_level: int = 0) -> None:
+    margin = str(compact_table_cell_margin(compact_level))
+    for row in table.rows:
+        for cell in row.cells:
+            tc_pr = cell._tc.get_or_add_tcPr()
+            tc_mar = tc_pr.find(qn("w:tcMar"))
+            if tc_mar is None:
+                tc_mar = OxmlElement("w:tcMar")
+                tc_pr.append(tc_mar)
+            for side in ("top", "left", "bottom", "right"):
+                node = tc_mar.find(qn(f"w:{side}"))
+                if node is None:
+                    node = OxmlElement(f"w:{side}")
+                    tc_mar.append(node)
+                node.set(qn("w:w"), margin)
+                node.set(qn("w:type"), "dxa")
+
+
+def insert_table_xml(document: Document, table_xml, profile: ExamProfile, images: dict | None = None, compact_level: int = 0) -> Table:
     for blip in table_xml.xpath(".//a:blip"):
         old_rel_id = blip.get(qn("r:embed"))
         if not old_rel_id or not images or old_rel_id not in images:
@@ -526,8 +595,12 @@ def insert_table_xml(document: Document, table_xml, profile: ExamProfile, images
             for paragraph in cell.paragraphs:
                 paragraph.paragraph_format.space_before = Pt(0)
                 paragraph.paragraph_format.space_after = Pt(0)
+                paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+                paragraph.paragraph_format.line_spacing = Pt(max(10, profile.line_spacing - compact_level))
                 for run in paragraph.runs:
                     set_run_font(run, profile.font, profile.table_font_size)
+    apply_table_cell_margins(table, compact_level)
+    apply_table_keep_options(table)
     return table
 
 
@@ -623,7 +696,7 @@ def add_exam_header(document: Document, profile: ExamProfile, form: dict) -> Non
     document.add_paragraph()
 
 
-def add_body(document: Document, profile: ExamProfile, blocks: list[dict]) -> None:
+def add_body(document: Document, profile: ExamProfile, blocks: list[dict], compact_level: int = 0) -> None:
     if not blocks:
         document.add_paragraph("請在此輸入試題內容。")
         return
@@ -651,11 +724,16 @@ def add_body(document: Document, profile: ExamProfile, blocks: list[dict]) -> No
                     else:
                         p.paragraph_format.first_line_indent = Twips(0)
                         size = profile.body_size
+                    apply_paragraph_keep_options(
+                        p,
+                        keep_next=looks_like_section_heading(text_line),
+                        keep_lines=len(text_line) <= 180,
+                    )
                     add_styled_runs(p, block.get("runs", []), text_line, profile.font, size)
-            add_block_images(document, profile, block.get("images", []))
+            add_block_images(document, profile, block.get("images", []), compact_level)
         elif block["type"] == "table":
             if block.get("xml") is not None:
-                insert_table_xml(document, deepcopy(block["xml"]), profile, block.get("images"))
+                insert_table_xml(document, deepcopy(block["xml"]), profile, block.get("images"), compact_level)
                 continue
             rows = block["rows"]
             cols = max(len(row) for row in rows)
@@ -666,6 +744,8 @@ def add_body(document: Document, profile: ExamProfile, blocks: list[dict]) -> No
                 for col_idx in range(cols):
                     text = row[col_idx] if col_idx < len(row) else ""
                     set_cell_text(table.cell(row_idx, col_idx), text, profile.font, profile.table_font_size, row_idx == 0)
+            apply_table_cell_margins(table, compact_level)
+            apply_table_keep_options(table)
 
 
 def add_document_guards(document: Document) -> None:
@@ -734,6 +814,31 @@ def compact_profile(profile: ExamProfile, level: int) -> ExamProfile:
     )
 
 
+def build_adjustment_summary(base_profile: ExamProfile, profile: ExamProfile, stats: dict, compact_level: int) -> list[str]:
+    summary = [
+        "已重新套用固定頁面、欄距、頁邊距、中文字型、題號縮排與 PDF 頁數檢查。",
+        "已套用大題不斷頁：大題標題盡量與下一段同頁，短題目段落盡量不拆行，表格列盡量不跨頁切開。",
+    ]
+    if stats.get("formulas") or stats.get("ruby"):
+        summary.append(f"已保留特殊內容：Word 公式 {stats.get('formulas', 0)} 段、注音 ruby {stats.get('ruby', 0)} 段。")
+    if compact_level <= 0:
+        summary.append("兩頁鎖定：未啟動額外壓縮，輸出已符合目標或未設定目標頁數。")
+        return summary
+    if profile.body_size != base_profile.body_size:
+        summary.append(f"文字字級：本文 {base_profile.body_size}pt -> {profile.body_size}pt，題目 {base_profile.question_size}pt -> {profile.question_size}pt。")
+    if profile.line_spacing != base_profile.line_spacing:
+        summary.append(f"行距：{base_profile.line_spacing}pt -> {profile.line_spacing}pt。")
+    if profile.table_font_size != base_profile.table_font_size:
+        summary.append(f"表格字級：{base_profile.table_font_size}pt -> {profile.table_font_size}pt。")
+    if profile.column_space != base_profile.column_space:
+        summary.append(f"欄距：{base_profile.column_space} twips -> {profile.column_space} twips。")
+    if profile.margins != base_profile.margins:
+        summary.append("頁邊距：已依兩頁鎖定模式縮小可用範圍限制，增加可排版空間。")
+    summary.append(f"圖片策略：圖片最大寬度再乘以 {compact_image_factor(compact_level):.0%}，降低圖片造成換頁的機率。")
+    summary.append(f"表格策略：表格內距壓縮到 {compact_table_cell_margin(compact_level)} twips，並同步縮小表格行距。")
+    return summary
+
+
 def build_report(profile: ExamProfile, stats: dict, pdf_pages: int | None, target_pages: int | None, compact_level: int) -> list[str]:
     report = [
         f"套用模板：{profile.label}",
@@ -754,6 +859,10 @@ def build_report(profile: ExamProfile, stats: dict, pdf_pages: int | None, targe
             report.append(f"目標頁數：仍超過 {target_pages} 頁，建議檢查表格、圖片或長題組")
     if compact_level:
         report.append(f"自動壓縮：已套用第 {compact_level} 級壓縮")
+    adjustments = stats.get("adjustments") or []
+    if adjustments:
+        report.append("轉換前後差異摘要：")
+        report.extend(f"- {item}" for item in adjustments)
     diagnostics = stats.get("diagnostics") or []
     if diagnostics:
         report.append("超頁診斷：")
@@ -761,23 +870,25 @@ def build_report(profile: ExamProfile, stats: dict, pdf_pages: int | None, targe
     return report
 
 
-def build_exam_docx(source: Path, output: Path, profile: ExamProfile, form: dict) -> dict:
+def build_exam_docx(source: Path, output: Path, profile: ExamProfile, form: dict, compact_level: int = 0, base_profile: ExamProfile | None = None) -> dict:
     source_for_read = convert_doc_to_docx(source) if source.suffix.lower() == ".doc" else source
     blocks = iter_docx_blocks(source_for_read)
     document = Document()
     set_document_defaults(document, profile)
     set_section(profile, document)
     add_exam_header(document, profile, form)
-    add_body(document, profile, blocks)
+    add_body(document, profile, blocks, compact_level)
     add_document_guards(document)
     document.save(str(output))
-    return {
+    stats = {
         "paragraphs": sum(1 for b in blocks if b["type"] == "paragraph"),
         "tables": sum(1 for b in blocks if b["type"] == "table"),
         "formulas": sum(1 for b in blocks if b.get("has_formula")),
         "ruby": sum(1 for b in blocks if b.get("has_ruby")),
         "diagnostics": analyze_layout_risks(blocks, profile),
     }
+    stats["adjustments"] = build_adjustment_summary(base_profile or profile, profile, stats, compact_level)
+    return stats
 
 
 def build_with_page_check(source: Path, output: Path, profile: ExamProfile, form: dict, target_pages: int | None = None) -> dict:
@@ -785,7 +896,7 @@ def build_with_page_check(source: Path, output: Path, profile: ExamProfile, form
     max_level = 3 if target_pages else 0
     for level in range(max_level + 1):
         candidate_profile = compact_profile(profile, level)
-        stats = build_exam_docx(source, output, candidate_profile, form)
+        stats = build_exam_docx(source, output, candidate_profile, form, level, profile)
         pdf_path = None
         pdf_pages = None
         preview_path = None
