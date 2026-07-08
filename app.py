@@ -316,6 +316,71 @@ def iter_docx_blocks(path: Path) -> list[dict]:
     return blocks
 
 
+def image_native_width_inches(image: dict) -> float | None:
+    try:
+        from PIL import Image
+
+        with Image.open(BytesIO(image["blob"])) as img:
+            return img.width / 96
+    except Exception:
+        return None
+
+
+def analyze_layout_risks(blocks: list[dict], profile: ExamProfile, limit: int = 8) -> list[str]:
+    risks: list[tuple[int, str]] = []
+    content_width = content_width_inches(profile)
+    paragraph_index = 0
+    table_index = 0
+    image_index = 0
+
+    for block in blocks:
+        if block["type"] == "paragraph":
+            paragraph_index += 1
+            text = normalize_text(block.get("text", ""))
+            text_len = len(text)
+            if text_len >= 420:
+                risks.append((90, f"第 {paragraph_index} 段文字很長（約 {text_len} 字），可能形成長題組或閱讀題而推擠頁數。"))
+            elif text_len >= 260:
+                risks.append((60, f"第 {paragraph_index} 段文字偏長（約 {text_len} 字），建議檢查是否可分題或調整段距。"))
+            if block.get("has_formula"):
+                risks.append((55, f"第 {paragraph_index} 段含 Word 公式，已保留公式 XML；若仍超頁，建議檢查公式所在題目是否可縮小行距。"))
+            if block.get("has_ruby"):
+                risks.append((55, f"第 {paragraph_index} 段含國語注音 ruby，已保留注音 XML；注音會增加行高，可能影響頁數。"))
+            for image in block.get("images", []):
+                image_index += 1
+                native_width = image_native_width_inches(image)
+                if native_width and native_width > content_width * 1.15:
+                    risks.append((85, f"第 {image_index} 張圖片原始寬度約 {native_width:.1f} 吋，超過目前欄寬 {content_width:.1f} 吋，已等比例縮放但仍可能造成換頁。"))
+                else:
+                    risks.append((35, f"第 {image_index} 張圖片會佔用獨立段落空間，若頁數超出可優先檢查圖片尺寸。"))
+        elif block["type"] == "table":
+            table_index += 1
+            rows = block.get("rows", [])
+            row_count = len(rows)
+            col_count = max((len(row) for row in rows), default=0)
+            max_cell_len = max((len(cell) for row in rows for cell in row), default=0)
+            if col_count >= 7:
+                risks.append((95, f"第 {table_index} 個表格有 {col_count} 欄，可能超過欄寬，是最常見跑版來源。"))
+            elif col_count >= 5:
+                risks.append((65, f"第 {table_index} 個表格有 {col_count} 欄，建議檢查欄寬與表格內距。"))
+            if row_count >= 14:
+                risks.append((80, f"第 {table_index} 個表格有 {row_count} 列，可能跨頁或擠壓後續題目。"))
+            elif row_count >= 8:
+                risks.append((50, f"第 {table_index} 個表格有 {row_count} 列，若超頁可先檢查這個表格。"))
+            if max_cell_len >= 80:
+                risks.append((70, f"第 {table_index} 個表格內有較長文字儲存格（約 {max_cell_len} 字），可能撐高列高。"))
+            for image in block.get("images", {}).values():
+                image_index += 1
+                native_width = image_native_width_inches(image)
+                if native_width and native_width > content_width * 1.15:
+                    risks.append((85, f"第 {table_index} 個表格內的第 {image_index} 張圖片原始寬度約 {native_width:.1f} 吋，可能撐寬表格。"))
+
+    if not risks:
+        return ["未偵測到明顯高風險段落、表格或圖片；若仍超頁，建議檢查頁首、頁尾或 Word 印表機版面差異。"]
+    ranked = sorted(risks, key=lambda item: item[0], reverse=True)
+    return [message for _score, message in ranked[:limit]]
+
+
 def preview_blocks(blocks: list[dict], limit: int = 8) -> list[str]:
     lines: list[str] = []
     for block in blocks:
@@ -676,6 +741,8 @@ def build_report(profile: ExamProfile, stats: dict, pdf_pages: int | None, targe
         f"雙欄設定：{profile.columns} 欄，欄距 {profile.column_space} twips",
         f"內容統計：段落 {stats['paragraphs']}，表格 {stats['tables']}",
     ]
+    if stats.get("formulas") or stats.get("ruby"):
+        report.append(f"特殊內容：公式 {stats.get('formulas', 0)} 段，注音 ruby {stats.get('ruby', 0)} 段")
     if pdf_pages is not None:
         report.append(f"PDF 頁數：{pdf_pages} 頁")
     if target_pages:
@@ -687,6 +754,10 @@ def build_report(profile: ExamProfile, stats: dict, pdf_pages: int | None, targe
             report.append(f"目標頁數：仍超過 {target_pages} 頁，建議檢查表格、圖片或長題組")
     if compact_level:
         report.append(f"自動壓縮：已套用第 {compact_level} 級壓縮")
+    diagnostics = stats.get("diagnostics") or []
+    if diagnostics:
+        report.append("超頁診斷：")
+        report.extend(f"- {item}" for item in diagnostics)
     return report
 
 
@@ -705,6 +776,7 @@ def build_exam_docx(source: Path, output: Path, profile: ExamProfile, form: dict
         "tables": sum(1 for b in blocks if b["type"] == "table"),
         "formulas": sum(1 for b in blocks if b.get("has_formula")),
         "ruby": sum(1 for b in blocks if b.get("has_ruby")),
+        "diagnostics": analyze_layout_risks(blocks, profile),
     }
 
 
@@ -782,7 +854,20 @@ def analyze():
         read_path = convert_doc_to_docx(upload_path) if upload_path.suffix.lower() == ".doc" else upload_path
         blocks = iter_docx_blocks(read_path)
         preview = preview_blocks(blocks)
-        return jsonify({"ok": True, "job_id": job_id, "expires_in_seconds": JOB_TTL_SECONDS, "filename": file.filename, "blocks": len(blocks), "preview": preview})
+        profile_key = request.form.get("profile", "b4-horizontal")
+        profile = PROFILES.get(profile_key, PROFILES["b4-horizontal"])
+        diagnostics = analyze_layout_risks(blocks, profile)
+        return jsonify(
+            {
+                "ok": True,
+                "job_id": job_id,
+                "expires_in_seconds": JOB_TTL_SECONDS,
+                "filename": file.filename,
+                "blocks": len(blocks),
+                "preview": preview,
+                "diagnostics": diagnostics,
+            }
+        )
     except Exception as exc:
         return error_response("分析失敗，請確認 Word 檔沒有加密或損毀。", 400, "ANALYZE_FAILED", [str(exc)])
 

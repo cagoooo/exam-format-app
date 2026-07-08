@@ -1,4 +1,4 @@
-const BUILD_VERSION = '2026.07.06-5';
+const BUILD_VERSION = '2026.07.06-6';
 const CACHE_NAME = `exam-format-app-${BUILD_VERSION}`;
 const PRECACHE = [
   './',

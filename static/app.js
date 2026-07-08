@@ -77,6 +77,8 @@ analyzeBtn.addEventListener("click", async () => {
   }
   setStatus("正在分析原始檔內容...", "busy");
   preview.innerHTML = "";
+  report.innerHTML = "";
+  report.hidden = true;
   let res, json;
   try {
     res = await fetchWithTimeout(apiUrl("/api/analyze"), { method: "POST", body: currentFormData() });
@@ -92,6 +94,11 @@ analyzeBtn.addEventListener("click", async () => {
   }
   setStatus(`分析完成：共讀到 ${json.blocks} 個內容區塊。${formatExpiry(json.expires_in_seconds)}`, "ok");
   preview.innerHTML = json.preview.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
+  if (json.diagnostics?.length) {
+    const items = ["超頁診斷：", ...json.diagnostics.map((item) => `- ${item}`)];
+    report.innerHTML = items.map((item) => `<p>${escapeHtml(item)}</p>`).join("");
+    report.hidden = false;
+  }
 });
 
 form.addEventListener("submit", async (event) => {
