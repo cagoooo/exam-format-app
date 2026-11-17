@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant" data-app-version="2026.07.08-1">
+<html lang="zh-Hant" data-app-version="2026.11.17-1">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -24,7 +24,7 @@
   <meta name="twitter:title" content="考卷格式自動校正系統">
   <meta name="twitter:description" content="固定版面、頁數檢查、Word 與 PDF 輸出的考卷格式標準化工具。">
   <meta name="twitter:image" content="https://cagoooo.github.io/exam-format-app/static/assets/og-exam-format.png?v=20260706-og1">
-  <link rel="stylesheet" href="static/styles.css?v=2026.07.08-1">
+  <link rel="stylesheet" href="static/styles.css?v=2026.11.17-1">
   <script>
     window.EXAM_FORMAT_API_BASE = "https://exam-format-api-142975838924.asia-east1.run.app";
   </script>
@@ -136,7 +136,29 @@
       </div>
     </aside>
   </main>
-  <script src="static/app.js?v=2026.07.08-1"></script>
-  <script src="static/sw-update.js?v=2026.07.08-1"></script>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <img src="static/assets/favicon.svg" alt="" width="48" height="48">
+        <div>
+          <strong>考卷格式自動校正系統</strong>
+          <span>上傳考卷 Word 檔，自動套用學校固定版面，輸出 Word 與 PDF。</span>
+        </div>
+      </div>
+      <ul class="footer-points">
+        <li><span class="fp-icon" aria-hidden="true">📐</span><div><strong>四種固定版面</strong><small>B4／A4 橫式、直式雙欄，欄距與邊界一次套好</small></div></li>
+        <li><span class="fp-icon" aria-hidden="true">📄</span><div><strong>Word 與 PDF 輸出</strong><small>校正後的 DOCX 與 PDF 都能直接下載</small></div></li>
+        <li><span class="fp-icon" aria-hidden="true">🔍</span><div><strong>頁數檢查</strong><small>轉換後自動核對 PDF 頁數，並預覽第一頁</small></div></li>
+      </ul>
+    </div>
+    <div class="footer-bottom">
+      <p class="site-credit">Made with <span class="site-credit__heart" aria-label="愛心">❤️</span> by
+        <a href="https://cagoooo.github.io/Akai/" target="_blank" rel="noopener noreferrer" title="阿凱老師教育科技創新專區" class="site-credit__author">阿凱老師</a><span class="footer-school"><span class="footer-dot" aria-hidden="true">・</span>桃園市龍潭區石門國民小學</span></p>
+      <p class="version-tag">v2026.11.17-1</p>
+    </div>
+  </footer>
+  <script src="static/app.js?v=2026.11.17-1"></script>
+  <script src="static/sw-update.js?v=2026.11.17-1"></script>
 </body>
 </html>
